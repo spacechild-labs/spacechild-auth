@@ -378,6 +378,40 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- Uncomment to create a default admin user with password "admin123"
 -- Password hash is bcrypt of "admin123" with salt rounds 12
 /*
-INSERT IGNORE INTO users (id, email, first_name, last_name, password_hash, is_email_verified, role) VALUES 
+INSERT IGNORE INTO users (id, email, first_name, last_name, password_hash, is_email_verified, role) VALUES
 ('admin-user-id-123', 'admin@spacechild.love', 'Admin', 'User', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewfVEqb.2lk5tHgC', 1, 'admin');
 */
+
+-- ============================================
+-- Agent Grants (WARRANT layer — ADDITIVE)
+-- ============================================
+-- A scoped, time-boxed, revocable delegation: an OAuth2 client (the "agent")
+-- is authorised to act on behalf of a human owner (user_id) within `scopes`
+-- (a subset of the agent-scope catalog and of the client's allowed_scopes)
+-- and `constraints` (e.g. maxAutoImpact, per-window rate caps).
+--
+-- The actual token issuance reuses the existing oauth2_* tables / JWT signing;
+-- agent_grants is the delegation record + constraints + revocation that the
+-- introspection (warrant check) endpoint consults.
+--
+-- Note: like oauth2_access_tokens, client_id is indexed (referencing
+-- oauth2_clients.client_id) but not hard-FK'd, matching the repo convention.
+-- user_id keeps the same ON DELETE CASCADE FK pattern used throughout.
+
+CREATE TABLE IF NOT EXISTS agent_grants (
+    id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    client_id VARCHAR(128) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    scopes JSON NOT NULL DEFAULT (JSON_ARRAY()),
+    bound_wallet_address VARCHAR(42) NULL,
+    constraints JSON NULL,
+    status ENUM('active', 'revoked', 'expired') NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP NULL,
+    revoked_at TIMESTAMP NULL,
+
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_agent_grants_user_id (user_id),
+    INDEX idx_agent_grants_client_id (client_id),
+    INDEX idx_agent_grants_status (status)
+);

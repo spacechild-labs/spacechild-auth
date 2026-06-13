@@ -744,6 +744,80 @@ class AuthService {
   }
 
   // ============================================
+  // AGENT DELEGATION TOKENS (WARRANT layer — ADDITIVE)
+  // ============================================
+
+  /**
+   * Mint a scoped, time-boxed JWT for a delegated agent (an OAuth2 client acting
+   * on behalf of a human owner). ADDITIVE: reuses the existing HS256 signing
+   * secret and issuer; does not touch the user access/refresh token flow.
+   *
+   * The token carries:
+   *   sub             — the human owner's user id
+   *   agent_client_id — the agent's OAuth2 client_id
+   *   grant_id        — the delegation record id
+   *   scopes          — the granted agent scopes
+   *   token_use       — "agent" (so it can never be mistaken for a user access token)
+   */
+  mintAgentToken(params: {
+    userId: string;
+    agentClientId: string;
+    grantId: string;
+    scopes: string[];
+    expiresInSec: number;
+  }): { token: string; expiresIn: number } {
+    const expiresIn = Math.max(1, Math.floor(params.expiresInSec));
+    const token = jwt.sign(
+      {
+        sub: params.userId,
+        agent_client_id: params.agentClientId,
+        grant_id: params.grantId,
+        scopes: params.scopes,
+        token_use: "agent",
+      },
+      getJwtSecret(),
+      {
+        expiresIn,
+        issuer: JWT_ISSUER,
+      }
+    );
+    return { token, expiresIn };
+  }
+
+  /**
+   * Verify an agent token minted by `mintAgentToken`. Returns the decoded
+   * delegation claims, or null if invalid/expired or not an agent token.
+   */
+  verifyAgentToken(token: string): {
+    userId: string;
+    agentClientId: string;
+    grantId: string;
+    scopes: string[];
+  } | null {
+    try {
+      const payload = jwt.verify(token, getJwtSecret(), {
+        issuer: JWT_ISSUER,
+      }) as any;
+
+      if (payload.token_use !== "agent") {
+        return null;
+      }
+      if (!payload.sub || !payload.grant_id || !payload.agent_client_id) {
+        return null;
+      }
+
+      return {
+        userId: payload.sub,
+        agentClientId: payload.agent_client_id,
+        grantId: payload.grant_id,
+        scopes: Array.isArray(payload.scopes) ? payload.scopes : [],
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // ============================================
   // JWKS
   // ============================================
 

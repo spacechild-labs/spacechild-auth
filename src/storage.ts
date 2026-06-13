@@ -6,6 +6,7 @@
  */
 
 import type { Pool, PoolConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import { randomUUID } from 'crypto';
 import { pool } from './db';
 import type {
   User, UpsertUser, InsertZkCredential, ZkCredential, ProofSession, InsertProofSession,
@@ -13,8 +14,27 @@ import type {
   EmailVerificationToken, InsertEmailVerificationToken, PasswordResetToken, InsertPasswordResetToken,
   MfaMethod, InsertMfaMethod, TotpSecret, InsertTotpSecret, WebauthnCredential, InsertWebauthnCredential,
   MfaChallenge, InsertMfaChallenge, MfaPendingLogin, InsertMfaPendingLogin,
-  NotificationPreferences, InsertNotificationPreferences
+  NotificationPreferences, InsertNotificationPreferences,
+  OAuth2Client, AgentGrant, InsertAgentGrant, AgentGrantConstraints
 } from './types';
+
+/**
+ * Parse a JSON column that mysql2 may return as either a parsed object/array
+ * (typical) or a raw string (some Dolt builds). Returns `fallback` on null /
+ * undefined / malformed input. Used by the WARRANT layer.
+ */
+function parseJsonColumn<T>(value: any, fallback: T): T {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') {
+    if (value.length === 0) return fallback;
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return fallback;
+    }
+  }
+  return value as T;
+}
 
 /**
  * Storage implementation with raw MySQL queries
@@ -738,6 +758,120 @@ export class Storage {
       updatesEnabled: prefs.updatesEnabled ?? true,
       marketingEnabled: prefs.marketingEnabled ?? false
     };
+  }
+
+  // ============================================
+  // OAUTH2 CLIENTS (read-only — WARRANT layer)
+  // ============================================
+
+  /** Map an oauth2_clients row to the OAuth2Client view, parsing JSON columns. */
+  private mapOAuth2Client(row: any): OAuth2Client | undefined {
+    if (!row) return undefined;
+    const c = toCamel(row);
+    return {
+      id: c.id,
+      clientId: c.clientId,
+      name: c.name,
+      description: c.description ?? null,
+      redirectUris: parseJsonColumn<string[]>(c.redirectUris, []),
+      allowedScopes: parseJsonColumn<string[]>(c.allowedScopes, []),
+      allowedGrantTypes: parseJsonColumn<string[]>(c.allowedGrantTypes, []),
+      isConfidential: !!c.isConfidential,
+      isActive: !!c.isActive,
+      ownerId: c.ownerId ?? null,
+      createdAt: c.createdAt ?? null,
+      updatedAt: c.updatedAt ?? null,
+    };
+  }
+
+  /** Look up an OAuth2 client by its client_id (the agent's client identifier). */
+  async getOAuth2ClientByClientId(clientId: string): Promise<OAuth2Client | undefined> {
+    const [rows] = await this.exec<RowDataPacket[]>(
+      'SELECT * FROM oauth2_clients WHERE client_id = ?',
+      [clientId]
+    );
+    return this.mapOAuth2Client(rows[0]);
+  }
+
+  // ============================================
+  // AGENT GRANTS (WARRANT layer)
+  // ============================================
+
+  /** Map an agent_grants row to the AgentGrant view, parsing JSON columns. */
+  private mapAgentGrant(row: any): AgentGrant | undefined {
+    if (!row) return undefined;
+    const g = toCamel(row);
+    return {
+      id: g.id,
+      clientId: g.clientId,
+      userId: g.userId,
+      scopes: parseJsonColumn<string[]>(g.scopes, []),
+      boundWalletAddress: g.boundWalletAddress ?? null,
+      constraints: parseJsonColumn<AgentGrantConstraints | null>(g.constraints, null),
+      status: g.status,
+      createdAt: g.createdAt ?? null,
+      expiresAt: g.expiresAt ?? null,
+      revokedAt: g.revokedAt ?? null,
+    };
+  }
+
+  async getAgentGrant(id: string): Promise<AgentGrant | undefined> {
+    const [rows] = await this.exec<RowDataPacket[]>(
+      'SELECT * FROM agent_grants WHERE id = ?',
+      [id]
+    );
+    return this.mapAgentGrant(rows[0]);
+  }
+
+  async getAgentGrantsByUser(userId: string): Promise<AgentGrant[]> {
+    const [rows] = await this.exec<RowDataPacket[]>(
+      'SELECT * FROM agent_grants WHERE user_id = ? ORDER BY created_at DESC',
+      [userId]
+    );
+    return rows.map(r => this.mapAgentGrant(r)).filter((g): g is AgentGrant => !!g);
+  }
+
+  async createAgentGrant(grant: InsertAgentGrant): Promise<AgentGrant> {
+    const id = grant.id || randomUUID();
+    await this.exec<ResultSetHeader>(
+      `INSERT INTO agent_grants
+       (id, client_id, user_id, scopes, bound_wallet_address, constraints, status, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        grant.clientId,
+        grant.userId,
+        JSON.stringify(grant.scopes || []),
+        grant.boundWalletAddress ?? null,
+        grant.constraints ? JSON.stringify(grant.constraints) : null,
+        grant.status || 'active',
+        grant.expiresAt ?? null,
+      ]
+    );
+
+    const created = await this.getAgentGrant(id);
+    if (!created) throw new Error('Failed to create agent grant');
+    return created;
+  }
+
+  /** Revoke a grant. Owner enforcement happens in the route layer. */
+  async revokeAgentGrant(id: string): Promise<void> {
+    await this.exec(
+      `UPDATE agent_grants
+       SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'active'`,
+      [id]
+    );
+  }
+
+  /** Mark a grant expired (used by housekeeping; introspect also treats elapsed expiry as expired). */
+  async expireAgentGrant(id: string): Promise<void> {
+    await this.exec(
+      `UPDATE agent_grants
+       SET status = 'expired'
+       WHERE id = ? AND status = 'active'`,
+      [id]
+    );
   }
 }
 

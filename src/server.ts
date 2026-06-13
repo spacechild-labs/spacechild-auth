@@ -9,6 +9,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import authRoutes from "./routes";
+import agentRoutes from "./agent-routes";
 
 const PORT = parseInt(process.env.PORT || "3100");
 
@@ -137,6 +138,10 @@ export function createApp() {
 
   // Mount auth routes under /auth prefix
   app.use("/auth", authRoutes);
+
+  // WARRANT layer (ADDITIVE): agent-delegation router under /auth/agents.
+  // Registered as a separate sub-router; does not alter existing /auth handlers.
+  app.use("/auth/agents", agentRoutes);
 
   // ============================================
   // ERROR HANDLING

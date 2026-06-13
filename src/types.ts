@@ -418,3 +418,74 @@ export interface InsertNotificationPreferences {
   updatesEnabled?: boolean;
   marketingEnabled?: boolean;
 }
+
+// ============================================
+// OAUTH2 CLIENT (read-only view for WARRANT layer)
+// ============================================
+
+/**
+ * Minimal read view of an oauth2_clients row, used by the agent-delegation
+ * (WARRANT) layer to validate ownership and allowed scopes. The oauth2_clients
+ * table already exists in the schema; this type is additive.
+ */
+export interface OAuth2Client {
+  id: number;
+  clientId: string;
+  name: string;
+  description: string | null;
+  redirectUris: string[];
+  allowedScopes: string[];
+  allowedGrantTypes: string[];
+  isConfidential: boolean;
+  isActive: boolean;
+  ownerId: string | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+}
+
+// ============================================
+// AGENT GRANTS (WARRANT layer — ADDITIVE)
+// ============================================
+
+export type AgentGrantStatus = "active" | "revoked" | "expired";
+
+/** Per-window rate constraint, e.g. { action: "trade", count: 10, windowSec: 3600 }. */
+export interface AgentGrantPerWindow {
+  action: string;
+  count: number;
+  windowSec: number;
+}
+
+/** Bounds attached to a delegation that the warrant check enforces. */
+export interface AgentGrantConstraints {
+  /** Maximum auto-approved impact for an action (units are surface-defined). */
+  maxAutoImpact?: number;
+  /** Optional per-window rate cap. */
+  perWindow?: AgentGrantPerWindow;
+  /** Allow forward-compatible extra constraint keys without losing them. */
+  [key: string]: unknown;
+}
+
+export interface AgentGrant {
+  id: string;
+  clientId: string;
+  userId: string;
+  scopes: string[];
+  boundWalletAddress: string | null;
+  constraints: AgentGrantConstraints | null;
+  status: AgentGrantStatus;
+  createdAt: Date | null;
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+}
+
+export interface InsertAgentGrant {
+  id?: string;
+  clientId: string;
+  userId: string;
+  scopes: string[];
+  boundWalletAddress?: string | null;
+  constraints?: AgentGrantConstraints | null;
+  status?: AgentGrantStatus;
+  expiresAt?: Date | null;
+}
