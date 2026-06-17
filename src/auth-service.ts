@@ -239,27 +239,25 @@ class AuthService {
         };
       }
 
-      // Check if user has MFA enabled
-      try {
-        const mfaModule = await import("./mfa");
-        const { mfaService } = mfaModule;
-        const requiresMfa = await mfaService.userRequiresMfa(user.id);
+      // Check if user has MFA enabled.
+      // SECURITY: do NOT catch errors here — a DB or service failure must fail the
+      // login rather than silently bypass MFA (deny-on-doubt).
+      const mfaModule = await import("./mfa");
+      const { mfaService } = mfaModule;
+      const requiresMfa = await mfaService.userRequiresMfa(user.id);
 
-        if (requiresMfa) {
-          // Create pending login and return partial token
-          const pendingLogin = await mfaService.createPendingLogin(user);
+      if (requiresMfa) {
+        // Create pending login and return partial token
+        const pendingLogin = await mfaService.createPendingLogin(user);
 
-          return {
-            success: true,
-            user: this.mapUser(user),
-            requiresMfa: true,
-            partialToken: pendingLogin.partialToken,
-            availableMethods: pendingLogin.availableMethods,
-            mfaExpiresAt: pendingLogin.expiresAt,
-          };
-        }
-      } catch (mfaError) {
-        console.warn("MFA check failed, continuing without MFA:", mfaError);
+        return {
+          success: true,
+          user: this.mapUser(user),
+          requiresMfa: true,
+          partialToken: pendingLogin.partialToken,
+          availableMethods: pendingLogin.availableMethods,
+          mfaExpiresAt: pendingLogin.expiresAt,
+        };
       }
 
       await storage.updateUser(user.id, { lastLoginAt: new Date() });

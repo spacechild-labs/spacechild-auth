@@ -175,7 +175,23 @@ router.post("/mfa/verify", async (req, res) => {
 
     const { partialToken, method, token } = parsed.data;
 
+    // Rate-limit MFA verification by IP to prevent TOTP brute-force.
+    // The partial token expires in 5 min; without this an attacker with a stolen
+    // partialToken could enumerate all 10^6 TOTP codes before expiry.
+    const clientIp = getClientIp(req);
+    const mfaRateKey = `mfa_verify:${clientIp}`;
+    const mfaRateCheck = checkAuthRateLimit(mfaRateKey);
+    if (!mfaRateCheck.allowed) {
+      return res.status(429).json({
+        error: `Too many MFA attempts. Please try again in ${mfaRateCheck.remainingSeconds} seconds.`,
+      });
+    }
+
     const result = await mfaService.completeMfaLogin(partialToken, method, token);
+
+    if (result.success) {
+      clearAuthRateLimit(mfaRateKey);
+    }
 
     if (!result.success) {
       return res.status(401).json({ error: result.error });
