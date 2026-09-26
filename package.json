@@ -53,7 +53,7 @@
     "@types/uuid": "^9.0.7",
     "tsx": "^4.6.0",
     "typescript": "^5.3.0",
-    "vitest": "^3.2.6"
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=20.0.0"
